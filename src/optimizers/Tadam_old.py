@@ -1,8 +1,5 @@
 import torch
-import numpy
 import wandb
-import torch.nn as nn
-
 class TadamOld(torch.optim.Optimizer):
     def __init__(self, params, total_steps, lr=1e-3, beta1=0.9, beta2=0.999, gamma=0.25, eps=1e-8):
         defaults = dict(lr=lr, beta1=beta1, beta2=beta2, gamma=gamma, eps=eps, total_steps=total_steps)
@@ -88,8 +85,6 @@ class TadamOld(torch.optim.Optimizer):
             # Update running loss and predict reduction
             group['ls'] = beta1 * group['ls'] + (1.0 - beta1) * loss
             group['ls_h'] = group['ls'] / bc1
-            # pr1 = torch.sum(m_hs * g_hs)
-            # pr2 = torch.sum(v_hs * g_hs ** 2)
             group['pr'] = pr_temp
 
             # Update betas
@@ -107,7 +102,7 @@ class TadamOld(torch.optim.Optimizer):
                 dt = dt_max
             else:
                 dt = 1.0
-            group['dt'] = max(min(dt * dt, dt_max), dt_min)
+            group['dt'] = max(min(dt * group['dt'], dt_max), dt_min)
 
             # Increment time step
             group['t'] += 1
