@@ -5,12 +5,13 @@ import torch.optim as optim
 from torchvision import datasets, transforms
 from torch.utils.data import DataLoader
 from optimizers.Tadam import Tadam
-from optimizers.Tadam_old import TadamOld
 from models.CAE import CAE
 import matplotlib.pyplot as plt
 import wandb
 from utils import set_seed
 import copy
+import argparse
+from optimizers.sophia import SophiaG
 
 # Load MNIST dataset
 def load_mnist(batch_size=64):
@@ -46,7 +47,7 @@ def train_step(model, optimizer, data):
         loss = compute_mse(model, data, True)  # Compute loss
         loss.backward()        # Backward pass (calculate gradients)
         return loss
-    if isinstance(optimizer, TadamOld):
+    if isinstance(optimizer, Tadam):
         optimizer.step(closure)
     else:
         optimizer.step()
@@ -86,8 +87,8 @@ def test(model, device, test_loader, criterion):
     test_loss /= len(test_loader.dataset)
     print(f'Test Loss: {test_loss:.4f}')
 
-# Run experiments with TadamOld and Adam
-def run_experiment(model, optimizer_name='TadamOld', epochs=5, lr=1e-3):
+# Run experiments with Tadam and Adam
+def run_experiment(model, optimizer_name='Tadam', epochs=5, lr=1e-3):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     train_loader, test_loader = load_mnist()
 
@@ -95,10 +96,14 @@ def run_experiment(model, optimizer_name='TadamOld', epochs=5, lr=1e-3):
     criterion = nn.MSELoss()
 
     # Choose optimizer
-    if optimizer_name == 'TadamOld':
-        optimizer = TadamOld(model.parameters(), total_steps=len(train_loader) * epochs, lr=lr)
-    else:
+    if optimizer_name == 'Tadam':
+        optimizer = Tadam(model.parameters(), total_steps=len(train_loader) * epochs, lr=lr)
+    elif optimizer_name == 'Sophia':
+        optimizer = SophiaG(model.parameters(), lr=2e-4, betas=(0.965, 0.99), rho=0.01, weight_decay=1e-1)
+    elif optimizer_name == 'Adam':
         optimizer = optim.Adam(model.parameters(), lr=lr)
+    else:
+        raise ValueError('Invalid optimizer name')
 
     # Train and test the model
     print(f'Running {optimizer_name} optimizer:')
@@ -110,22 +115,29 @@ def run_experiment(model, optimizer_name='TadamOld', epochs=5, lr=1e-3):
 
 # Run the experiments for both optimizers
 if __name__ == '__main__':
+    # parse arguments
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--optimizer', type=str, default="Tadam", help='Number of epochs to train')
+    
+    args = parser.parse_args()
+    optimizer_name = args.optimizer
+
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     set_seed(42)
-    wandb.init(project='TadamOld')
-    print("Experiment with TadamOld:")
+    wandb.init(project='optimizer_name')
+    print(f"Experiment with {optimizer_name}:")
     in_shape = (1, 28, 28)
     filters = [16, 32, 64]
     code_dim = 16
     model = CAE(in_shape, filters, code_dim)
-    TadamOld_loss = run_experiment(copy.deepcopy(model).to(device), optimizer_name='TadamOld', epochs=5, lr=1e-3)
+    optim_loss = run_experiment(copy.deepcopy(model).to(device), optimizer_name=optimizer_name, epochs=5, lr=1e-3)
     
     print("\nExperiment with Adam:")
     Adam_loss = run_experiment(copy.deepcopy(model).to(device), optimizer_name='Adam', epochs=5, lr=1e-3)
     
     # Plot the training losses and save
     plt.figure()
-    plt.plot(TadamOld_loss, label='TadamOld')
+    plt.plot(optim_loss, label='Tadam')
     plt.plot(Adam_loss, label='Adam')
     plt.xlabel('Epoch')
     plt.ylabel('Training Loss')
