@@ -42,14 +42,12 @@ class TadamOld(torch.optim.Optimizer):
                         group['m_h'].append(torch.zeros_like(p.data))
                         group['m'].append(torch.zeros_like(p.data))
                         group['s'].append(torch.zeros_like(p.data))
-                        group['v'].append(torch.zeros_like(p.data))
+                        group['v'].append(torch.ones_like(p.data) * eps)
 
             t = group['t']
             dt = group['dt']
             bp1 = group['bp1']
             bp2 = group['bp2']
-
-            device = params[0].device
 
             # Bias correction
             bc1 = 1.0 - bp1
@@ -90,8 +88,8 @@ class TadamOld(torch.optim.Optimizer):
             # Update running loss and predict reduction
             group['ls'] = beta1 * group['ls'] + (1.0 - beta1) * loss
             group['ls_h'] = group['ls'] / bc1
-            pr1 = torch.sum(m_hs * g_hs)
-            pr2 = torch.sum(v_hs * g_hs ** 2)
+            # pr1 = torch.sum(m_hs * g_hs)
+            # pr2 = torch.sum(v_hs * g_hs ** 2)
             group['pr'] = pr_temp
 
             # Update betas

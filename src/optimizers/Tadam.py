@@ -34,7 +34,7 @@ class Tadam(torch.optim.Optimizer):
         if self.t < 1.1:
             delta = 1.0
         else:
-            delta = self.compute_delta(loss.item(), self.dt)
+            delta = self.dt
 
 
         bp1, bp2 = self.bp1, self.bp2
@@ -85,7 +85,7 @@ class Tadam(torch.optim.Optimizer):
         self.bp2 = bp2 * beta2
         self.t += 1.0
         self.pr = pr_temp
-        self.dt = delta
+        self.dt = self.compute_delta(loss.item(), self.dt)
 
     def compute_delta(self, loss, dt):
         rho = (self.ls_h - loss) / max(self.pr, self.defaults['eps'])
