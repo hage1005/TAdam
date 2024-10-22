@@ -1,13 +1,15 @@
 import torch
 import time
-import torch
 import torch.nn as nn
 import torch.optim as optim
 from torchvision import datasets, transforms
 from torch.utils.data import DataLoader
 from optimizers.Tadam import Tadam
+from optimizers.Tadam_old import TadamOld
 from models.CAE import CAE
 import matplotlib.pyplot as plt
+import wandb
+from utils import set_seed
 
 # Load MNIST dataset
 def load_mnist(batch_size=64):
@@ -31,27 +33,27 @@ def compute_mse(train_model, x, training=True):
     return loss
 
 # Training Step with optional closure
-def train_step(model, optimizer, data, criterion, use_closure=False):
+def train_step(model, optimizer, data):
     model.train()
     optimizer.zero_grad()
 
-    if use_closure:
-        def closure():
-            optimizer.zero_grad()  # Zero out gradients within closure
-            loss = compute_mse(model, data, True)  # Compute MSE loss
-            loss.backward()
-            return loss
-        loss = optimizer.step(closure)
+    # Standard training step without closure
+    loss = compute_mse(model, data, True)
+    loss.backward()
+    def closure():
+        optimizer.zero_grad()  # Zero the gradients
+        loss = compute_mse(model, data, True)  # Compute loss
+        loss.backward()        # Backward pass (calculate gradients)
+        return loss
+    if isinstance(optimizer, TadamOld):
+        optimizer.step(closure)
     else:
-        # Standard training step without closure
-        loss = compute_mse(model, data, True)
-        loss.backward()
         optimizer.step()
 
     return loss.item()
 
 # Main training loop
-def train(model, device, train_loader, optimizer, criterion, epochs=100, use_closure=False):
+def train(model, device, train_loader, optimizer, epochs=100):
     losses = []
     for epoch in range(1, epochs + 1):
         model.train()
@@ -60,7 +62,7 @@ def train(model, device, train_loader, optimizer, criterion, epochs=100, use_clo
 
         for batch_idx, (train_x, _) in enumerate(train_loader):
             train_x = train_x.to(device)  # Move data to the appropriate device
-            loss = train_step(model, optimizer, train_x, criterion, use_closure)
+            loss = train_step(model, optimizer, train_x)
             train_loss += loss
 
         train_loss /= len(train_loader)
@@ -83,8 +85,8 @@ def test(model, device, test_loader, criterion):
     test_loss /= len(test_loader.dataset)
     print(f'Test Loss: {test_loss:.4f}')
 
-# Run experiments with Tadam and Adam
-def run_experiment(optimizer_name='Tadam', epochs=5, lr=1e-3):
+# Run experiments with TadamOld and Adam
+def run_experiment(optimizer_name='TadamOld', epochs=5, lr=1e-3):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     train_loader, test_loader = load_mnist()
 
@@ -96,16 +98,14 @@ def run_experiment(optimizer_name='Tadam', epochs=5, lr=1e-3):
     criterion = nn.MSELoss()
 
     # Choose optimizer
-    if optimizer_name == 'Tadam':
-        optimizer = Tadam(model.parameters(), total_steps=len(train_loader) * epochs, lr=lr)
-        use_closure = True
+    if optimizer_name == 'TadamOld':
+        optimizer = TadamOld(model.parameters(), total_steps=len(train_loader) * epochs, lr=lr)
     else:
         optimizer = optim.Adam(model.parameters(), lr=lr)
-        use_closure = False
 
     # Train and test the model
     print(f'Running {optimizer_name} optimizer:')
-    _, train_loss = train(model, device, train_loader, optimizer, criterion, epochs=epochs, use_closure=use_closure)
+    _, train_loss = train(model, device, train_loader, optimizer, epochs=epochs)
     
     test(model, device, test_loader, criterion)
     
@@ -113,15 +113,17 @@ def run_experiment(optimizer_name='Tadam', epochs=5, lr=1e-3):
 
 # Run the experiments for both optimizers
 if __name__ == '__main__':
-    print("Experiment with TAdam:")
-    Tadam_loss = run_experiment(optimizer_name='Tadam', epochs=100, lr=1e-3)
+    set_seed(42)
+    wandb.init(project='TadamOld')
+    print("Experiment with TadamOld:")
+    TadamOld_loss = run_experiment(optimizer_name='TadamOld', epochs=5, lr=1e-3)
     
     print("\nExperiment with Adam:")
-    Adam_loss = run_experiment(optimizer_name='Adam', epochs=100, lr=1e-3)
+    Adam_loss = run_experiment(optimizer_name='Adam', epochs=5, lr=1e-3)
     
     # Plot the training losses and save
     plt.figure()
-    plt.plot(Tadam_loss, label='Tadam')
+    plt.plot(TadamOld_loss, label='TadamOld')
     plt.plot(Adam_loss, label='Adam')
     plt.xlabel('Epoch')
     plt.ylabel('Training Loss')

@@ -1,110 +1,103 @@
 import torch
-import torch.nn as nn
-
+import wandb
 class Tadam(torch.optim.Optimizer):
     def __init__(self, params, total_steps, lr=1e-3, beta1=0.9, beta2=0.999, gamma=0.25, eps=1e-8):
-        defaults = dict(lr=lr, beta1=beta1, beta2=beta2, gamma=gamma, eps=eps, total_steps=total_steps)
+        defaults = dict(lr=lr, beta1=beta1, beta2=beta2, gamma=gamma, eps=eps)
         super(Tadam, self).__init__(params, defaults)
+        self.total_steps = total_steps
+        self.t = 1.0  # timestep
+        self.ls = 0.0  # loss
+        self.ls_h = 0.0  # loss_hat
+        self.pr = 0.0  # predict reduction
+        self.dt = 1.0  # delta
+        self.bp1 = beta1  # bias correction 1
+        self.bp2 = beta2  # bias correction 2
+
+        # Initialize the state variables for all parameters
+        for group in self.param_groups:
+            for p in group['params']:
+                if p.requires_grad:
+                    state = self.state[p]
+                    state['m'] = torch.zeros_like(p.data)
+                    state['m_h'] = torch.zeros_like(p.data)
+                    state['s'] = torch.zeros_like(p.data)
+                    state['v'] = torch.ones_like(p.data) * eps
 
     def step(self, closure=None):
         loss = None
         if closure is not None:
             loss = closure()
 
+        if loss is None:
+            return
+
+        if self.t < 1.1:
+            delta = 1.0
+        else:
+            delta = self.compute_delta(loss.item(), self.dt)
+
+
+        bp1, bp2 = self.bp1, self.bp2
+        bc1 = 1.0 - bp1
+        bc2 = 1.0 - bp2
+        beta1, beta2 = self.defaults['beta1'], self.defaults['beta2']
+        
+        self.ls = beta1 * self.ls + (1.0 - beta1) * loss.item()
+        self.ls_h = self.ls / bc1
+
+        pr_temp = 0.0
+
         for group in self.param_groups:
-            params = group['params']
+            beta1, beta2, gamma, eps = group['beta1'], group['beta2'], group['gamma'], group['eps']
             lr = group['lr']
-            beta1 = group['beta1']
-            beta2 = group['beta2']
-            gamma = group['gamma']
-            eps = group['eps']
-            total_steps = group['total_steps']
-            
-            # Initialize time step, bias correction terms, and trust region parameters
-            if 't' not in group:
-                group['t'] = 1
-                group['m_h'] = []
-                group['m'] = []
-                group['s'] = []
-                group['v'] = []
-                group['bp1'] = beta1
-                group['bp2'] = beta2
-                group['ls_h'] = 0.0
-                group['ls'] = 0.0
-                group['pr'] = 0.0
-                group['dt'] = 1.0
-                
-                # Initialize momentum and variance buffers
-                for p in params:
-                    if p.requires_grad:
-                        group['m_h'].append(torch.zeros_like(p.data))
-                        group['m'].append(torch.zeros_like(p.data))
-                        group['s'].append(torch.zeros_like(p.data))
-                        group['v'].append(torch.zeros_like(p.data))
 
-            t = group['t']
-            dt = group['dt']
-            bp1 = group['bp1']
-            bp2 = group['bp2']
-
-            # Compute gradients
-            grad_flat = torch.cat([p.grad.view(-1) for p in params if p.grad is not None])
-
-            # Bias correction
-            bc1 = 1.0 - bp1
-            bc2 = 1.0 - bp2
-
-            for i, p in enumerate(params):
+            for p in group['params']:
                 if p.grad is None:
                     continue
-                m = group['m'][i]
-                s = group['s'][i]
-                v = group['v'][i]
-                m_h = group['m_h'][i]
 
-                # Update first and second moment estimates
-                m.mul_(beta1).add_(1 - beta1, p.grad)
-                m_h.copy_(m / bc1)
-                
-                s.mul_(beta2).addcmul_(1 - beta2, p.grad, p.grad)
-                s_h = s / bc2
-                
-                dv = torch.square(p.grad - m_h) * (beta2 - bp2) / bc2
-                v.mul_(beta2).add_(1 - beta2, dv)
-                v_h = v / bc2
+                state = self.state[p]
+                m, m_h = state['m'], state['m_h']
+                s, v = state['s'], state['v']
 
-                # Fisher approximation and trust region update
-                f_h = (1.0 + torch.sum(torch.square(m_h) / (v_h + eps))) * v_h
-                u_h = torch.max(dt * f_h, torch.sqrt(s_h))  # rearranged inverse and delta
-                g_h = m_h * dt / (u_h + eps)
+                dv = ((p.grad.data - m_h) ** 2) * (beta2 - bp2) / bc2
+                state['v'] = beta2 * v + (1.0 - beta2) * dv
+                v_h = state['v'] / bc2
 
-                # Apply update to parameters
+                state['m'] = beta1 * m + (1.0 - beta1) * p.grad.data
+                state['m_h'] = state['m'] / bc1
+
+                state['s'] = beta2 * s + (1.0 - beta2) * (p.grad.data ** 2)
+                s_h = state['s'] / bc2
+
+                f_h = (1.0 + torch.sum((m_h ** 2) / (v_h + eps))) * v_h
+
+                u_h = torch.maximum(delta * f_h, torch.sqrt(s_h))
+                g_h = m_h * delta / (u_h + eps)
+
+                # Directly apply update without flattening
                 p.data.add_(-lr * g_h)
 
-            # Update running loss and predict reduction
-            group['ls'] = beta1 * group['ls'] + (1.0 - beta1) * loss
-            group['ls_h'] = group['ls'] / bc1
-            pr1 = torch.sum(m_h * g_h)
-            pr2 = torch.sum(v_h * torch.square(g_h))
-            group['pr'] = (pr1 - 0.5 * pr2) * lr
+                pr1 = torch.sum(m_h * g_h)
+                pr2 = pr1 ** 2 + torch.sum(v_h * g_h ** 2)
+                pr_temp += (pr1 - 0.5 * pr2) * lr
 
-            # Update betas
-            group['bp1'] *= beta1
-            group['bp2'] *= beta2
+        self.bp1 = bp1 * beta1
+        self.bp2 = bp2 * beta2
+        self.t += 1.0
+        self.pr = pr_temp
+        self.dt = delta
 
-            # Compute new delta (dt)
-            rho = (group['ls_h'] - loss) / max(group['pr'], eps)
-            dt_min = (1.0 - gamma) ** ((t - 1) / total_steps)
-            dt_max = 1.0 + gamma ** ((t - 1) / total_steps)
-            if rho < gamma:
-                dt = dt_min
-            elif rho > 1.0 - gamma:
-                dt = dt_max
-            else:
-                dt = 1.0
-            group['dt'] = max(min(dt * dt, dt_max), dt_min)
+    def compute_delta(self, loss, dt):
+        rho = (self.ls_h - loss) / max(self.pr, self.defaults['eps'])
+        wandb.log({'rho': rho})
+        dt_min = torch.pow(torch.tensor(1.0 - self.defaults['gamma']), (self.t - 1.0) / self.total_steps)
+        dt_max = 1.0 + torch.pow(torch.tensor(self.defaults['gamma']), (self.t - 1.0) / self.total_steps)
 
-            # Increment time step
-            group['t'] += 1
-
-        return loss
+        if rho < self.defaults['gamma']:
+            new_dt = dt_min
+        elif rho > (1.0 - self.defaults['gamma']):
+            new_dt = dt_max
+        else:
+            new_dt = 1.0
+        dt = torch.clamp(new_dt * dt, min=dt_min, max=dt_max)
+        return dt
