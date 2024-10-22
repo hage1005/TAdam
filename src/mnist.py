@@ -10,6 +10,7 @@ from models.CAE import CAE
 import matplotlib.pyplot as plt
 import wandb
 from utils import set_seed
+import copy
 
 # Load MNIST dataset
 def load_mnist(batch_size=64):
@@ -86,15 +87,11 @@ def test(model, device, test_loader, criterion):
     print(f'Test Loss: {test_loss:.4f}')
 
 # Run experiments with TadamOld and Adam
-def run_experiment(optimizer_name='TadamOld', epochs=5, lr=1e-3):
+def run_experiment(model, optimizer_name='TadamOld', epochs=5, lr=1e-3):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     train_loader, test_loader = load_mnist()
 
     # Initialize model, criterion, and optimizer
-    in_shape = (1, 28, 28)
-    filters = [16, 32, 64]
-    code_dim = 16
-    model = CAE(in_shape, filters, code_dim).to(device)
     criterion = nn.MSELoss()
 
     # Choose optimizer
@@ -113,13 +110,18 @@ def run_experiment(optimizer_name='TadamOld', epochs=5, lr=1e-3):
 
 # Run the experiments for both optimizers
 if __name__ == '__main__':
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     set_seed(42)
     wandb.init(project='TadamOld')
     print("Experiment with TadamOld:")
-    TadamOld_loss = run_experiment(optimizer_name='TadamOld', epochs=5, lr=1e-3)
+    in_shape = (1, 28, 28)
+    filters = [16, 32, 64]
+    code_dim = 16
+    model = CAE(in_shape, filters, code_dim)
+    TadamOld_loss = run_experiment(copy.deepcopy(model).to(device), optimizer_name='TadamOld', epochs=5, lr=1e-3)
     
     print("\nExperiment with Adam:")
-    Adam_loss = run_experiment(optimizer_name='Adam', epochs=5, lr=1e-3)
+    Adam_loss = run_experiment(copy.deepcopy(model).to(device), optimizer_name='Adam', epochs=5, lr=1e-3)
     
     # Plot the training losses and save
     plt.figure()
